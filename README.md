@@ -1,91 +1,70 @@
-Rate Limiter
+# Concurrent In-Memory Rate Limiter for LLM API Gateways
 
-Background
-Build an in-memory rate limiter for an LLM API gateway where multiple clients share API resources. The limiter must prevent a single client from consuming excessive capacity while safely handling concurrent requests and shared state.
+A robust, thread-safe, in-memory rate-limiting engine designed for high-concurrency LLM API gateways. This system enforces isolated rate limits per **client** and **resource**, preventing unfair resource consumption while safely handling high-volume parallel requests.
 
-Task
-Implement a rate limiter with two configurable strategies: Sliding Window and Token Bucket. The limiter should maintain independent state for each client and resource, correctly determine whether each request should be accepted, and return the remaining capacity and estimated recovery time. The implementation must also maintain accurate statistics and remain correct under concurrent access.
+## 🚀 Features
 
-What This Problem Tests
-Implementing Sliding Window and Token Bucket rate-limiting algorithms
-Handling time-based expiration and continuous token refills
-Managing shared state and thread safety in a concurrent environment
-Applying basic locking and synchronization mechanisms
-Maintaining isolated state across clients and resources
-Handling edge cases such as rejected requests, exhausted capacity, and partial recovery
-Translating detailed algorithmic requirements into a reliable engineering implementation
+*   **Dual-Strategy Engine**: Implements both **Sliding Window Log** and **Token Bucket** algorithms.
+*   **Granular Isolation**: Maintains completely independent state tables for every `(client_id, resource_id)` pair.
+*   **Thread Safety**: Thread-safe state synchronization under multi-threaded request processing.
+*   **Metadata Responses**: Returns real-time metadata including execution status (`Allowed/Rejected`), remaining capacity, and estimated time-to-recovery.
 
-<!-- Allow step by step execution -->
+---
 
-Request 1: Happens at t = 2 seconds
+## 🛠️ Core Algorithms
 
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the current list: []
-2. current_time = 2
-3. expiry_time = 2 - 10 \(\rightarrow \) -8
-4. while timestamps and timestamps[0] <= expiry_time:
-	• The list is empty, so this loop is skipped. No timestamps are removed.
-5. if len(timestamps) < limit:
-	• Is 0 < 3? Yes (True).
-6. timestamps.append(2)
-	• The list becomes [2].
-7. Result: Returns True (Request Allowed).
+### 1. Sliding Window Log
+Tracks individual request timestamps in a discrete time series. It slides continuously, ensuring that a user never exceeds the specified maximum capacity over any trailing time window.
 
-Request 2: Happens at t = 5 seconds
+*   **Window Size (\(W\))**: Time duration of the sliding window (e.g., 10 seconds).
+*   **Limit (\(L\))**: Maximum requests allowed within \(W\).
+*   **Eviction Engine**: On every request, entries older than \(t - W\) are purged before calculating the capacity check.
 
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2]
-2. current_time = 5
-3. expiry_time = 5 - 10 \(\rightarrow \) -5
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Is 2 <= -5? No. The loop terminates. No timestamps are removed.
-5. if len(timestamps) < limit:
-	• Is 1 < 3? Yes (True).
-6. timestamps.append(5)
-	• The list becomes [2, 5].
-7. Result: Returns True (Request Allowed).
+### 2. Token Bucket
+Models continuous capacity recovery. Perfect for handling bursty traffic while enforcing a strict sustained ceiling.
 
-Request 3: Happens at t = 8 seconds
+*   **Capacity (\(C\))**: Maximum size of the bucket.
+*   **Refill Rate (\(R\))**: Amount of tokens added per unit time (e.g., 0.5 tokens/sec).
+*   **Continuous Refill Formula**: \(\text{Tokens}_{\text{new}} = \min(C, \text{Tokens}_{\text{old}} + (t_{\text{current}} - t_{\text{last}}) \times R)\)
 
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2, 5]
-2. current_time = 8
-3. expiry_time = 8 - 10 \(\rightarrow \) -2
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Is 2 <= -2? No. The loop terminates.
-5. if len(timestamps) < limit:
-	• Is 2 < 3? Yes (True).
-6. timestamps.append(8)
-	• The list becomes [2, 5, 8].
-7. Result: Returns True (Request Allowed).
+---
 
-Request 4: Happens at t = 11 seconds (The Limit Test)
+## 🔍 Detailed Walkthrough: Sliding Window Log
 
-Notice that the very first request (t = 2) is still inside the 10-second window because 11 - 2 = 9 seconds (less than 10).
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2, 5, 8]
-2. current_time = 11
-3. expiry_time = 11 - 10 \(\rightarrow \) 1
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Is 2 <= 1? No. The loop terminates. Nothing is expired yet.
-5. if len(timestamps) < limit:
-	• Is 3 < 3? No (False).
-6. Execution jumps to return False.
-7. Result: Returns False (Request Rejected / Rate Limited).
+The following operational tracing outlines how the sliding window mechanism evaluates state over time.
 
-Request 5: Happens at t = 13 seconds (The Sliding Window Clean)
+**Configuration Setup:**
+*   **Window Size**: 10 seconds
+*   **Capacity Limit**: 3 requests
 
-Now, let's see how the window slides and cleans up old data.
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2, 5, 8]
-2. current_time = 13
-3. expiry_time = 13 - 10 \(\rightarrow \) 3
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Iteration 1: timestamps[0] is 2. Is 2 <= 3? Yes.
-		• timestamps.pop(0) removes 2. The list is now [5, 8].
-	• Iteration 2: timestamps[0] is now 5. Is 5 <= 3? No. The loop stops.
-5. if len(timestamps) < limit:
-	• Is 2 < 3? Yes (True).
-6. timestamps.append(13)
-	• The list becomes [5, 8, 13].
-7. Result: Returns True (Request Allowed again because t=2 dropped off!).
+### Request History Evaluation Trace
+
+| Sequence | Time (\(t\)) | Window Range (\(t-10\)) | Evicted Timestamps | Active Logs State | Action | Remaining Capacity |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Req 1** | \(t = 2\text{s}\) | \(\le -8\text{s}\) | None | `[2]` | **Allowed** ✅ | 2 |
+| **Req 2** | \(t = 5\text{s}\) | \(\le -5\text{s}\) | None | `[2, 5]` | **Allowed** ✅ | 1 |
+| **Req 3** | \(t = 8\text{s}\) | \(\le -2\text{s}\) | None | `[2, 5, 8]` | **Allowed** ✅ | 0 |
+| **Req 4** | \(t = 11\text{s}\)| \(\le 1\text{s}\) | None *(t=2 still active)* | `[2, 5, 8]` | **Rejected** ❌ | 0 (Exhausted) |
+| **Req 5** | \(t = 13\text{s}\)| \(\le 3\text{s}\) | `[2]` removed | `[5, 8, 13]` | **Allowed** ✅ | 0 |
+
+---
+
+## 🏗️ Architecture & Interface
+
+The core service exposes a single unified gateway evaluation method:
+
+```python
+def check_rate_limit(client_id: str, resource_id: str, current_time: float) -> RateLimitResult:
+    """
+    Evaluates whether a target request passes or fails the rate limit policy.
+    
+    Returns a result object containing:
+    - allowed (bool): Status of the request execution.
+    - remaining_capacity (int/float): Available slots/tokens remaining.
+    - recovery_time (float): Seconds remaining until capacity returns to >= 1.
+    """
+```
+
+### Concurrent Protection Blueprint
+To guarantee memory and execution correctness across high-volume worker threads, state transitions use fine-grained synchronization keys:
+
