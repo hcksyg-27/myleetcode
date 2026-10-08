@@ -1,91 +1,93 @@
-Rate Limiter
+# Dual-Strategy Rate Limiter
 
-Background
-Build an in-memory rate limiter for an LLM API gateway where multiple clients share API resources. The limiter must prevent a single client from consuming excessive capacity while safely handling concurrent requests and shared state.
+A high-performance, object-oriented Python implementation of rate limiting featuring **Sliding Window Log** and **Token Bucket** algorithms. This library provides a unified interface to isolate and track traffic constraints per client and per resource.
 
-Task
-Implement a rate limiter with two configurable strategies: Sliding Window and Token Bucket. The limiter should maintain independent state for each client and resource, correctly determine whether each request should be accepted, and return the remaining capacity and estimated recovery time. The implementation must also maintain accurate statistics and remain correct under concurrent access.
+## 🚀 Features
 
-What This Problem Tests
-Implementing Sliding Window and Token Bucket rate-limiting algorithms
-Handling time-based expiration and continuous token refills
-Managing shared state and thread safety in a concurrent environment
-Applying basic locking and synchronization mechanisms
-Maintaining isolated state across clients and resources
-Handling edge cases such as rejected requests, exhausted capacity, and partial recovery
-Translating detailed algorithmic requirements into a reliable engineering implementation
+* **Dual Strategies:** Choose between memory-efficient `token_bucket` or burst-protective `sliding_window`.
+* **Resource Isolation:** Granular rate limiting tracked uniquely by `(client_id, resource, strategy)`.
+* **High Performance:** Utilizes a double-ended queue (`collections.deque`) for O(1) operations in the sliding window log, and pure math formulas for O(1) constant memory in the token bucket.
+* **Actionable Metadata:** Blocked requests return precise `retry_after` countdowns.
 
-<!-- Allow step by step execution -->
+---
 
-Request 1: Happens at t = 2 seconds
+## 📊 Comparison Matrix
 
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the current list: []
-2. current_time = 2
-3. expiry_time = 2 - 10 \(\rightarrow \) -8
-4. while timestamps and timestamps[0] <= expiry_time:
-	• The list is empty, so this loop is skipped. No timestamps are removed.
-5. if len(timestamps) < limit:
-	• Is 0 < 3? Yes (True).
-6. timestamps.append(2)
-	• The list becomes [2].
-7. Result: Returns True (Request Allowed).
+| Strategy | Memory Complexity | CPU Complexity | Handling Burst Traffic |
+| :--- | :--- | :--- | :--- |
+| **Token Bucket** | **O(1) Constant** | **O(1)** (Arithmetic) | Allows instant bursts up to capacity |
+| **Sliding Window** | **O(N) Variable** | **O(N)** (Queue cleanup) | Enforces strict, smoothed pacing |
 
-Request 2: Happens at t = 5 seconds
+---
 
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2]
-2. current_time = 5
-3. expiry_time = 5 - 10 \(\rightarrow \) -5
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Is 2 <= -5? No. The loop terminates. No timestamps are removed.
-5. if len(timestamps) < limit:
-	• Is 1 < 3? Yes (True).
-6. timestamps.append(5)
-	• The list becomes [2, 5].
-7. Result: Returns True (Request Allowed).
+## 🛠️ Usage Examples
 
-Request 3: Happens at t = 8 seconds
+### 1. Token Bucket Strategy (Recommended for API endpoints with burst allowances)
+Allows clients to instantly consume accumulated tokens, tracking state lazily with timestamps.
 
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2, 5]
-2. current_time = 8
-3. expiry_time = 8 - 10 \(\rightarrow \) -2
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Is 2 <= -2? No. The loop terminates.
-5. if len(timestamps) < limit:
-	• Is 2 < 3? Yes (True).
-6. timestamps.append(8)
-	• The list becomes [2, 5, 8].
-7. Result: Returns True (Request Allowed).
+```python
+import time
+from rate_limiter import RateLimiter
 
-Request 4: Happens at t = 11 seconds (The Limit Test)
+# Allow 5 requests every 10 seconds per client/resource
+limiter = RateLimiter(strategy="token_bucket", limit=5, window_size=10)
 
-Notice that the very first request (t = 2) is still inside the 10-second window because 11 - 2 = 9 seconds (less than 10).
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2, 5, 8]
-2. current_time = 11
-3. expiry_time = 11 - 10 \(\rightarrow \) 1
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Is 2 <= 1? No. The loop terminates. Nothing is expired yet.
-5. if len(timestamps) < limit:
-	• Is 3 < 3? No (False).
-6. Execution jumps to return False.
-7. Result: Returns False (Request Rejected / Rate Limited).
+# Simulate requests
+for i in range(6):
+    result = limiter.allow(client_id="user_42", resource="/api/v1/checkout")
+    print(f"Request {i+1}: {result}")
+    time.sleep(0.5)
+```
 
-Request 5: Happens at t = 13 seconds (The Sliding Window Clean)
+**Example Output:**
+```json
+{"allowed": true, "remaining": 4}
+{"allowed": true, "remaining": 3}
+{"allowed": true, "remaining": 2}
+{"allowed": true, "remaining": 1}
+{"allowed": true, "remaining": 0}
+{"allowed": false, "remaining": 0, "retry_after": 1.49}
+```
 
-Now, let's see how the window slides and cleans up old data.
-1. timestamps = get_state("client-A", "llm")
-	• Fetches the list: [2, 5, 8]
-2. current_time = 13
-3. expiry_time = 13 - 10 \(\rightarrow \) 3
-4. while timestamps and timestamps[0] <= expiry_time:
-	• Iteration 1: timestamps[0] is 2. Is 2 <= 3? Yes.
-		• timestamps.pop(0) removes 2. The list is now [5, 8].
-	• Iteration 2: timestamps[0] is now 5. Is 5 <= 3? No. The loop stops.
-5. if len(timestamps) < limit:
-	• Is 2 < 3? Yes (True).
-6. timestamps.append(13)
-	• The list becomes [5, 8, 13].
-7. Result: Returns True (Request Allowed again because t=2 dropped off!).
+### 2. Sliding Window Log Strategy (Recommended for tight security/expensive operations)
+Prevents micro-bursting by keeping an exact chronological history of all calls within the moving time frame.
+
+```python
+# Allow 2 requests every 5 seconds
+strict_limiter = RateLimiter(strategy="sliding_window", limit=2, window_size=5)
+
+print(strict_limiter.allow("user_101", "/api/login"))  # True
+print(strict_limiter.allow("user_101", "/api/login"))  # True
+print(strict_limiter.allow("user_101", "/api/login"))  # False (retry_after returned)
+```
+
+---
+
+## 🔍 Response Schema
+
+The `.allow(client_id, resource)` method returns a structured dictionary:
+
+### On Success (`"allowed": true`)
+```json
+{
+  "allowed": true,
+  "remaining": 4
+}
+```
+
+### On Throttled (`"allowed": false`)
+```json
+{
+  "allowed": false,
+  "remaining": 0,
+  "retry_after": 2.345
+}
+```
+* `retry_after`: A float value representing the exact seconds the client must wait until a slot opens up or a full token regenerates.
+
+---
+
+## 🧪 Architecture Details
+
+* **`get_state(client_id, resource)`**: Automatically provisions state machines dynamically. Sliding Window initializes a `deque()`, while Token Bucket instantiates a structural dictionary tracking floating-point balances.
+* **Lazy Evaluation**: The token bucket does not run background timer threads. It dynamically updates the balance using elapsed time delta variables only when a request strikes the code path.
