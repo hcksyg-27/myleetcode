@@ -41,9 +41,19 @@ class RateLimiter:
         # Step 5: if below limit --> accept and add current timestamps
         if len(timestamps) < self.limit:
             timestamps.append(current_time)
-            return True
+            remaining = self.limit - len(timestamps)
+            return {
+                "allowed": True,
+                "remaining": remaining,
+            }
+        # We only reach here when the limit is full
+        retry_after = timestamps[0] + self.window_size - current_time
         # Otherwise --> reject
-        return False
+        return {
+            "allowed": False,
+            "remaining": 0,
+            "retry_after": retry_after
+        }
 
 
     
@@ -55,10 +65,10 @@ if __name__ == "__main__":
         window_size=10
     )
     # Test 1
+  
     # print(limiter.strategy)
     # print(limiter.limit)
     # print(limiter.window_size)
-
 
 
     # Test 2
@@ -120,7 +130,6 @@ if __name__ == "__main__":
 
     # print("Waiting 10 seconds...")
     # time.sleep(10)
-
     # print("Request 5:", limiter.allow("client-A", "llm"))
 
     # Test Client are isolated
@@ -142,8 +151,11 @@ if __name__ == "__main__":
     print(limiter.allow("client-A", "llm"))
     print(limiter.allow("client-A", "llm"))
     print(limiter.allow("client-A", "llm"))
+    print("Waiting 10 seconds...")
+    time.sleep(10)
+    print(limiter.allow("client-A", "llm"))
 
     print("\nClient A - Embedding:")
     print(limiter.allow("client-A", "embedding"))
 
-    print(limiter.states)
+    print("State:",limiter.states)
