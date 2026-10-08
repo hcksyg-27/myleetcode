@@ -54,14 +54,14 @@ The following operational tracing outlines how the sliding window mechanism eval
 The core service exposes a single unified gateway evaluation method:
 
 ```python
-def check_rate_limit(client_id: str, resource_id: str, current_time: float) -> RateLimitResult:
+class RateLimiter: -> RateLimitResult:
     """
     Evaluates whether a target request passes or fails the rate limit policy.
     
     Returns a result object containing:
     - allowed (bool): Status of the request execution.
     - remaining_capacity (int/float): Available slots/tokens remaining.
-    - recovery_time (float): Seconds remaining until capacity returns to >= 1.
+    - retry_after (float): Seconds remaining until capacity returns to >= 1.
     """
 ```
 
