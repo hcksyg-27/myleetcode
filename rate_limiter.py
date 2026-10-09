@@ -216,16 +216,16 @@ if __name__ == "__main__":
         window_size=10
     )
 
-
-print("--- Sliding Window Execution ---")
-print(sliding_limiter.allow("client-A", "llm"))  # Allowed (remaining: 1)
-print(sliding_limiter.allow("client-A", "llm"))  # Allowed (remaining: 0)
-print(sliding_limiter.allow("client-A", "llm"))  # Rejected (returns retry_after)
-
-# 2. Initialize Token Bucket Instance (Limit: 2 per 5 seconds)
-bucket_limiter = RateLimiter(strategy="token_bucket", limit=2, window_size=5)
-
-print("\n--- Token Bucket Execution ---")
-print(bucket_limiter.allow("client-A", "llm"))   # Allowed (remaining: 1)
-print(bucket_limiter.allow("client-A", "llm"))   # Allowed (remaining: 0)
-print(bucket_limiter.allow("client-A", "llm"))   # Rejected (returns retry_after until next partial token generation)
+    
+    print("--- Sliding Window Execution ---")
+    print(sliding_limiter.allow("client-A", "llm"))  # Allowed (remaining: 1)
+    print(sliding_limiter.allow("client-A", "llm"))  # Allowed (remaining: 0)
+    print(sliding_limiter.allow("client-A", "llm"))  # Rejected (returns retry_after)
+    
+    # 2. Initialize Token Bucket Instance (Limit: 2 per 5 seconds)
+    bucket_limiter = RateLimiter(strategy="token_bucket", limit=2, window_size=5)
+    
+    print("\n--- Token Bucket Execution ---")
+    print(bucket_limiter.allow("client-A", "llm"))   # Allowed (remaining: 1)
+    print(bucket_limiter.allow("client-A", "llm"))   # Allowed (remaining: 0)
+    print(bucket_limiter.allow("client-A", "llm"))   # Rejected (returns retry_after until next partial token generation)
